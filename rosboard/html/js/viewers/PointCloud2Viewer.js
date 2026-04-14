@@ -1,6 +1,12 @@
 "use strict";
 
 class PointCloud2Viewer extends Space3DViewer {
+  constructor(card, topicName, topicType) {
+    super(card, topicName, topicType);
+    this.decayTime = 10.0;
+    this.pointCloudHistory = [];
+  }
+
   _base64decode(base64) {
     var binary_string = window.atob(base64);
     var len = binary_string.length;
@@ -42,16 +48,87 @@ class PointCloud2Viewer extends Space3DViewer {
   onData(msg) {
     this.card.title.text(msg._topic_name);
 
-    let points = null;
+    let pointCloud = null;
 
     if(msg.__comp) {
-      points = this.decodeAndRenderCompressed(msg);
+      pointCloud = this.decodeAndRenderCompressed(msg);
     } else {
-      points = this.decodeAndRenderUncompressed(msg);
+      pointCloud = this.decodeAndRenderUncompressed(msg);
     }
 
+    this.renderPointCloud(pointCloud);
   }
   
+  getCustomMenuItems() {
+    return [{
+      label: "Decay Time",
+      onClick: () => {
+        let value = window.prompt("Decay Time in seconds (0 = latest points only)", String(this.decayTime));
+        if(value === null) return;
+        let parsedValue = Number(value);
+        if(!Number.isFinite(parsedValue) || parsedValue < 0) {
+          this.warn("Decay Time must be a number greater than or equal to 0.");
+          return;
+        }
+        this.decayTime = parsedValue;
+        this.renderPointCloud();
+      },
+    }];
+  }
+
+  pruneHistory(nowSeconds) {
+    if(this.decayTime <= 0) {
+      if(this.pointCloudHistory.length > 1) {
+        this.pointCloudHistory = [this.pointCloudHistory[this.pointCloudHistory.length - 1]];
+      }
+      return;
+    }
+
+    let minTimestamp = nowSeconds - this.decayTime;
+    this.pointCloudHistory = this.pointCloudHistory.filter((entry) => entry.timestamp >= minTimestamp);
+  }
+
+  renderPointCloud(pointCloud = null) {
+    let nowSeconds = Date.now() / 1000.0;
+    if(pointCloud != null) {
+      this.pointCloudHistory.push({
+        timestamp: nowSeconds,
+        points: pointCloud.points,
+        zmin: pointCloud.zmin,
+        zmax: pointCloud.zmax,
+      });
+    }
+
+    this.pruneHistory(nowSeconds);
+
+    if(this.pointCloudHistory.length === 0) {
+      this.draw([]);
+      return;
+    }
+
+    let totalLength = 0;
+    let zmin = Infinity;
+    let zmax = -Infinity;
+    for(let i=0; i<this.pointCloudHistory.length; i++) {
+      totalLength += this.pointCloudHistory[i].points.length;
+      zmin = Math.min(zmin, this.pointCloudHistory[i].zmin);
+      zmax = Math.max(zmax, this.pointCloudHistory[i].zmax);
+    }
+
+    let mergedPoints = new Float32Array(totalLength);
+    let offset = 0;
+    for(let i=0; i<this.pointCloudHistory.length; i++) {
+      mergedPoints.set(this.pointCloudHistory[i].points, offset);
+      offset += this.pointCloudHistory[i].points.length;
+    }
+
+    this.draw([
+      {type: "path", data: [0, 0, 0, 1], color: "#00f060", lineWidth: 2},
+      {type: "path", data: [0, 0, 1, 0], color: "#f06060", lineWidth: 2},
+      {type: "points", data: mergedPoints, zmin: zmin, zmax: zmax},
+    ]);
+  }
+
   decodeAndRenderCompressed(msg) {
     // decodes a uint16 lossy-compressed point cloud
     // basic explanation of algorithm:
@@ -84,11 +161,11 @@ class PointCloud2Viewer extends Space3DViewer {
       points[3*i+2] = (points_view.getUint16(offset+4, true) / 65535) * zrange + zmin;
     }
 
-    this.draw([
-      {type: "path", data: [0, 0, 0, 1], color: "#00f060", lineWidth: 2},
-      {type: "path", data: [0, 0, 1, 0], color: "#f06060", lineWidth: 2},
-      {type: "points", data: points, zmin: zmin, zmax: zmin + zrange},
-    ]);
+    return {
+      points: points,
+      zmin: zmin,
+      zmax: zmin + zrange,
+    };
   }
 
   decodeAndRenderUncompressed(msg) {
@@ -141,11 +218,28 @@ class PointCloud2Viewer extends Space3DViewer {
       points[3*i+2] = zDataGetter(offset + zOffset, littleEndian); // y
     }
 
-    this.draw([
-      {type: "path", data: [0, 0, 0, 1], color: "#00f060", lineWidth: 2},
-      {type: "path", data: [0, 0, 1, 0], color: "#f06060", lineWidth: 2},
-      {type: "points", data: points, zmin: -2.0, zmax: 2.0},
-    ]);
+    let zmin = -2.0;
+    let zmax = 2.0;
+    if("z" in fields) {
+      zmin = Infinity;
+      zmax = -Infinity;
+      for(let i=0; i<data.byteLength/msg.point_step-1; i++) {
+        let z = points[3*i+2];
+        if(Number.isNaN(z)) continue;
+        zmin = Math.min(zmin, z);
+        zmax = Math.max(zmax, z);
+      }
+      if(!Number.isFinite(zmin) || !Number.isFinite(zmax)) {
+        zmin = -2.0;
+        zmax = 2.0;
+      }
+    }
+
+    return {
+      points: points,
+      zmin: zmin,
+      zmax: zmax,
+    };
   }
 }
 

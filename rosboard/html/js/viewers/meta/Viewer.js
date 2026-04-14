@@ -59,6 +59,16 @@ class Viewer {
       item.click(() => { Viewer.onSwitchViewer(that, viewers[i]); });
     }
 
+    let customMenuItems = this.getCustomMenuItems();
+    if(customMenuItems.length > 0) {
+      $('<li class="mdl-menu__item mdl-menu__item--full-bleed-divider" disabled></li>').appendTo(this.card.menu);
+      for(let i in customMenuItems) {
+        let customItem = customMenuItems[i];
+        let item = $('<li class="mdl-menu__item"></li>').text(customItem.label).appendTo(this.card.menu);
+        item.click(() => { customItem.onClick(); });
+      }
+    }
+
     componentHandler.upgradeAllRegistered();
 
     // card pause button
@@ -114,6 +124,10 @@ class Viewer {
   onDataPaused(data) { }
 
   onData(data) { }
+
+  getCustomMenuItems() {
+    return [];
+  }
 
   update(data) {
     let time = Date.now();
